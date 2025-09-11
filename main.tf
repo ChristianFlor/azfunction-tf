@@ -1,6 +1,7 @@
 # Definición del provider que ocuparemos
 provider "azurerm" {
   features {}
+  subscription_id = "3fe0943f-dc81-4413-9048-3296332bd707"
 }
 
 # Se crea el grupo de recursos, al cual se asociarán los demás recursos
@@ -11,7 +12,7 @@ resource "azurerm_resource_group" "rg" {
 
 # Se crea un Storage Account, para asociarlo al function app (recomendación de la documentación).
 resource "azurerm_storage_account" "sa" {
-  name                     = var.name_function
+  name                     = var.storage_account_name
   resource_group_name      = azurerm_resource_group.rg.name
   location                 = azurerm_resource_group.rg.location
   account_tier             = "Standard"
@@ -21,7 +22,7 @@ resource "azurerm_storage_account" "sa" {
 # Se crea el recurso Service Plan para especificar el nivel de servicio 
 # (por ejemplo, "Consumo", "Functions Premium" o "Plan de App Service"), en este caso "Y1" hace referencia a plan consumo 
 resource "azurerm_service_plan" "sp" {
-  name                = var.name_function
+  name                = var.service_plan_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   os_type             = "Windows"

@@ -1,15 +1,39 @@
-# Definición del provider que ocuparemos
-provider "azurerm" {
-  features {}
+terraform {
+  required_version = ">=0.12"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~>3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~>3.0"
+    }
+    azapi = {
+      source  = "azure/azapi"
+      version = "~>1.5"
+    }
+  }
 }
 
-# Se crea el grupo de recursos, al cual se asociarán los demás recursos
+provider "azurerm" {
+  features {}
+  # subscription_id should be set via environment variable or Azure CLI
+  # subscription_id = var.subscription_id
+}
+
 resource "azurerm_resource_group" "rg" {
   name     = var.name_function
   location = var.location
+  
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+    Owner       = var.owner
+    CreatedBy   = "Terraform"
+  }
 }
 
-# Se crea un Storage Account, para asociarlo al function app (recomendación de la documentación).
 resource "azurerm_storage_account" "sa" {
   name                     = var.name_function
   resource_group_name      = azurerm_resource_group.rg.name
@@ -18,8 +42,6 @@ resource "azurerm_storage_account" "sa" {
   account_replication_type = "LRS"
 }
 
-# Se crea el recurso Service Plan para especificar el nivel de servicio 
-# (por ejemplo, "Consumo", "Functions Premium" o "Plan de App Service"), en este caso "Y1" hace referencia a plan consumo 
 resource "azurerm_service_plan" "sp" {
   name                = var.name_function
   resource_group_name = azurerm_resource_group.rg.name
@@ -28,7 +50,6 @@ resource "azurerm_service_plan" "sp" {
   sku_name            = "Y1"
 }
 
-# Se crea la aplicación de Funciones 
 resource "azurerm_windows_function_app" "wfa" {
   name                = var.name_function
   resource_group_name = azurerm_resource_group.rg.name
@@ -45,21 +66,17 @@ resource "azurerm_windows_function_app" "wfa" {
   }
 }
 
-# Se crea una función dentro de la aplicación de funciones
 resource "azurerm_function_app_function" "faf" {
   name            = var.name_function
   function_app_id = azurerm_windows_function_app.wfa.id
   language        = "Javascript"
-  # Se carga el código de ejemplo dentro de la función
   file {
     name    = "index.js"
     content = file("example/index.js")
   }
-  # Se define el payload para los test
   test_data = jsonencode({
     "name" = "Azure"
   })
-  # Se mapean las solicitudes
   config_json = jsonencode({
     "bindings" : [
       {
@@ -79,6 +96,158 @@ resource "azurerm_function_app_function" "faf" {
       }
     ]
   })
+}
+
+
+resource "azurerm_virtual_network" "my_terraform_network" {
+  name                = "myVnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_subnet" "my_terraform_subnet" {
+  name                 = "mySubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.my_terraform_network.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_public_ip" "my_terraform_public_ip" {
+  name                = "myPublicIP"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_network_security_group" "my_terraform_nsg" {
+  name                = "myNetworkSecurityGroup"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  # SSH access - restrict to specific IP ranges in production
+  security_rule {
+    name                       = "SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = var.allowed_ssh_cidr
+    destination_address_prefix = "*"
+  }
+
+  # HTTP access for web applications
+  security_rule {
+    name                       = "HTTP"
+    priority                   = 1002
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  # HTTPS access for web applications
+  security_rule {
+    name                       = "HTTPS"
+    priority                   = 1003
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+    Owner       = var.owner
+    CreatedBy   = "Terraform"
+  }
+}
+
+resource "azurerm_network_interface" "my_terraform_nic" {
+  name                = "myNIC"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "my_nic_configuration"
+    subnet_id                     = azurerm_subnet.my_terraform_subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.my_terraform_public_ip.id
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "example" {
+  network_interface_id      = azurerm_network_interface.my_terraform_nic.id
+  network_security_group_id = azurerm_network_security_group.my_terraform_nsg.id
+}
+
+resource "random_id" "random_id" {
+  keepers = {
+    resource_group = azurerm_resource_group.rg.name
+  }
+  byte_length = 8
+}
+
+resource "azurerm_storage_account" "my_storage_account" {
+  name                     = "diag${random_id.random_id.hex}"
+  location                 = azurerm_resource_group.rg.location
+  resource_group_name      = azurerm_resource_group.rg.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_linux_virtual_machine" "my_terraform_vm" {
+  name                  = "${var.name_function}-vm"
+  location              = azurerm_resource_group.rg.location
+  resource_group_name   = azurerm_resource_group.rg.name
+  network_interface_ids = [azurerm_network_interface.my_terraform_nic.id]
+  size                  = var.vm_size
+
+  os_disk {
+    name                 = "${var.name_function}-os-disk"
+    caching              = "ReadWrite"
+    storage_account_type = "Premium_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  computer_name  = "${var.name_function}-vm"
+  admin_username = var.admin_username
+
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = azapi_resource_action.ssh_public_key_gen.output.publicKey
+  }
+
+  boot_diagnostics {
+    storage_account_uri = azurerm_storage_account.my_storage_account.primary_blob_endpoint
+  }
+
+  # Enable automatic updates
+  patch_mode = "AutomaticByPlatform"
+
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+    Owner       = var.owner
+    CreatedBy   = "Terraform"
+    Resource    = "Virtual Machine"
+  }
 }
 
 
